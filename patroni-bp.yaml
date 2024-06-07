@@ -1,0 +1,141 @@
+apiVersion: cr.kanister.io/v1alpha1
+kind: Blueprint
+metadata: 
+  name: patroni-bp
+  namespace: kasten-io  
+actions:
+  backupPrehook:
+    phases:    
+    - func: KubeExecAll
+      name: pg_backup_start      
+      args:
+        namespace: "{{ .Object.metadata.namespace }}"
+        # work
+        #pods: '{{range until 3}} acid-pg-cluster-{{.}}{{end}}'
+        # does not work we're investigating
+        #pods: "{{range until (int .Object.spec.numberOfInstances)}} {{ $.Object.metadata.name }}-{{.}}{{end}}"
+        # work
+        pods: "{{ .Object.metadata.name }}-0 {{ .Object.metadata.name }}-1 {{ .Object.metadata.name }}-2"
+        containers: postgres
+        command:
+        - bash
+        - -o
+        - errexit
+        - -o
+        - pipefail
+        - -c
+        - |
+           function log
+           {
+              echo "$(date "+%Y-%m-%d %H:%M:%S.%3N") - $0 - $*" >> pg_backup.log
+           }
+           # init the logs file
+           echo "$(date "+%Y-%m-%d %H:%M:%S.%3N") - Starting base backup operations" > pg_backup.log
+           # who is the leader
+           LEADER=$(patronictl list -f json |jq -r '.[]|select(.Role=="Leader").Member')
+           log "Leader is $LEADER"
+           WHOAMI=$(hostname)
+           log "I am $WHOAMI"
+           if [ "$LEADER" == "$WHOAMI" ]
+           then
+             log "I am the Leader starting base_backup"
+             psql -c "select pg_start_backup('hot_backup');" &>> pg_backup.log                          
+           else
+             log "I am not the Leader, doing nothing"
+           fi               
+  backupPosthook:
+    phases:
+    - func: KubeExecAll
+      name: pg_backup_stop      
+      args:
+        namespace: "{{ .Object.metadata.namespace }}"
+        # work
+        #pods: '{{range until 3}} acid-pg-cluster-{{.}}{{end}}'
+        # does not work we're investigating
+        #pods: "{{range until (int .Object.spec.numberOfInstances)}} {{ $.Object.metadata.name }}-{{.}}{{end}}"
+        # work
+        pods: "{{ .Object.metadata.name }}-0 {{ .Object.metadata.name }}-1 {{ .Object.metadata.name }}-2"
+        containers: postgres
+        command:
+        - bash
+        - -o
+        - errexit
+        - -o
+        - pipefail
+        - -c
+        - |
+           function log
+           {
+              echo "$(date "+%Y-%m-%d %H:%M:%S.%3N") - $0 - $*" >> pg_backup.log
+           }           
+           # who is the leader
+           LEADER=$(patronictl list -f json |jq -r '.[]|select(.Role=="Leader").Member')
+           log "Leader is $LEADER"
+           WHOAMI=$(hostname)
+           log "I am $WHOAMI"
+           if [ "$LEADER" == "$WHOAMI" ]
+           then
+             log "I am the Leader stoping base_backup"             
+             psql -c "select pg_stop_backup();" &>> pg_backup.log             
+           else
+             log "I am not the Leader, doing nothing"
+           fi
+  reinitLeaderAndReplicas:
+    phases:
+    - func: KubeTask
+      name: identifyCluster
+      args:
+        image: ghcr.io/kanisterio/kanister-kubectl-1.18:0.57.0                
+        command:
+          - sh
+          - -o
+          - errexit
+          - -o
+          - pipefail
+          - -c
+          - |
+            # improve by listing all the cluster in the Namespace
+            # and execute the second task in a loop
+            namespace="{{ .Namespace.Name }}"
+            pgcluster=$(kubectl get postgresqls.acid.zalan.do -n $namespace -ojsonpath="{.items[0].metadata.name}")
+            kando output pgcluster $pgcluster              
+            sleep 1
+    - func: KubeExecAll
+      name: force_leader      
+      args:
+        namespace: "{{ .Namespace.Name }}"
+        pods: "{{ .Phases.identifyCluster.Output.pgcluster }}-0"
+        containers: postgres
+        command:
+        - bash
+        - -o
+        - errexit
+        - -o
+        - pipefail
+        - -c
+        - |
+           pgcluster="{{ .Phases.identifyCluster.Output.pgcluster }}"
+           function log
+           {
+              echo "$(date "+%Y-%m-%d %H:%M:%S.%3N") - $0 - $*" >> pg_restore.log
+           }  
+           # init the logs file
+           echo "$(date "+%Y-%m-%d %H:%M:%S.%3N") - Checking we have a leader" > pg_restore.log                   
+           # Do we have a leader ?
+           LEADER=$(patronictl list -f json |jq -r '.[]|select(.Role=="Leader").Member')
+           if [ "$LEADER" == "" ]
+           then
+             log "We don't have any leader let's force leader"             
+             patronictl failover --force --candidate $pgcluster-0 $pgcluster &>> pg_restore.log
+           else
+             log "We have a Leader $LEADER, doing nothing"
+           fi
+           # wait 10s to elect a leader 
+           sleep 10
+           log "We have a Leader now, let's reinit the replicas" 
+           # to improve : give time and check if replicas has lag before reinit them
+           for replica in $(patronictl list -f json |jq -r '.[]|select(.Role=="Replica").Member')
+           do 
+              patronictl reinit --force $pgcluster $replica &>> pg_restore.log
+           done    
+             
