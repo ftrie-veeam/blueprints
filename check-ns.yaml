@@ -1,0 +1,45 @@
+apiVersion: cr.kanister.io/v1alpha1
+kind: Blueprint
+metadata:
+  name: check-ns
+  namespace: kasten-io
+actions:
+  backup:
+    phases:
+    - func: WaitV2
+      name: waitForNSReady-backup
+      args:
+        timeout: 1s
+        conditions:
+          anyOf:
+          - condition: '{{if eq .status.phase "Active"}}true{{else}}false{{end}}'
+            objectReference:
+              apiVersion: "v1"
+              name: "{{ .StatefulSet.Namespace }}"
+              resource: "namespaces"
+  restore:
+    phases:
+    - func: WaitV2
+      name: waitForNSReady-restore
+      args:
+        timeout: 1s
+        conditions:
+          anyOf:
+          - condition: '{{if eq .status.phase "Active"}}true{{else}}false{{end}}'
+            objectReference:
+              apiVersion: "v1"
+              name: "{{ .StatefulSet.Namespace }}"
+              resource: "namespaces"
+  delete:
+    phases:
+    - func: WaitV2
+      name: waitForNSReady-delete
+      args:
+        timeout: 1s
+        conditions:
+          anyOf:
+          - condition: '{{if eq .status.phase "Active"}}true{{else}}false{{end}}'
+            objectReference:
+              apiVersion: "v1"
+              name: "{{ .StatefulSet.Namespace }}"
+              resource: "namespaces"
