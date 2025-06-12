@@ -1,0 +1,44 @@
+apiVersion: cr.kanister.io/v1alpha1
+kind: Blueprint
+metadata:
+  name: create-volumes
+  namespace: kasten-io
+actions:
+  create-volumes-before-restore:
+    phases:
+    - func: KubeOps
+      name: create-volumes
+      args:
+        operation: create
+        spec: |-
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            labels:
+              app: busybox
+            name: volume1-busybox-statefulset-03-0
+            namespace: busybox
+          spec:
+            accessModes:
+            - ReadWriteOnce
+            resources:
+              requests:
+                storage: 500Mi
+            storageClassName: longhorn-1
+            volumeMode: Filesystem
+          ---
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            labels:
+              app: busybox
+            name: volume2-busybox-statefulset-03-0
+            namespace: busybox
+          spec:
+            accessModes:
+            - ReadWriteOnce
+            resources:
+              requests:
+                storage: 500Mi
+            storageClassName: longhorn-1
+            volumeMode: Filesystem
